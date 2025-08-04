@@ -11,6 +11,7 @@ jobs:
     permissions:
       contents: write
       issues: write
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -45,49 +46,49 @@ jobs:
           fi
 
       - name: Generate summarized IP diff for issue
-  if: steps.compare.outputs.changed == 'true'
-  id: ipdiff
-  run: |
-    echo "## GitHub Meta IP Changes" > ip_diff.md
-    echo "" >> ip_diff.md
-    echo "**Timestamp:** $(date -u)" >> ip_diff.md
-    echo "" >> ip_diff.md
+        if: steps.compare.outputs.changed == 'true'
+        id: ipdiff
+        run: |
+          echo "## GitHub Meta IP Changes" > ip_diff.md
+          echo "" >> ip_diff.md
+          echo "**Timestamp:** $(date -u)" >> ip_diff.md
+          echo "" >> ip_diff.md
 
-    for section in hooks actions pages api git web packages; do
-      echo "### Section: \`$section\`" >> ip_diff.md
-      old=$(jq -r ".$section[]" .meta.last.json | sort)
-      new=$(jq -r ".$section[]" trimmed-meta.json | sort)
+          for section in hooks actions pages api git web packages; do
+            echo "### Section: \`$section\`" >> ip_diff.md
+            old=$(jq -r ".$section[]" .meta.last.json | sort)
+            new=$(jq -r ".$section[]" trimmed-meta.json | sort)
 
-      added=$(comm -13 <(echo "$old") <(echo "$new") | head -n 10)
-      removed=$(comm -23 <(echo "$old") <(echo "$new") | head -n 10)
+            added=$(comm -13 <(echo "$old") <(echo "$new") | head -n 10)
+            removed=$(comm -23 <(echo "$old") <(echo "$new") | head -n 10)
 
-      if [ -n "$added" ]; then
-        echo "**Added (first 10 shown):**" >> ip_diff.md
-        echo '```' >> ip_diff.md
-        echo "$added" >> ip_diff.md
-        echo '```' >> ip_diff.md
-      fi
+            if [ -n "$added" ]; then
+              echo "**Added (first 10 shown):**" >> ip_diff.md
+              echo '```' >> ip_diff.md
+              echo "$added" >> ip_diff.md
+              echo '```' >> ip_diff.md
+            fi
 
-      if [ -n "$removed" ]; then
-        echo "**Removed (first 10 shown):**" >> ip_diff.md
-        echo '```' >> ip_diff.md
-        echo "$removed" >> ip_diff.md
-        echo '```' >> ip_diff.md
-      fi
+            if [ -n "$removed" ]; then
+              echo "**Removed (first 10 shown):**" >> ip_diff.md
+              echo '```' >> ip_diff.md
+              echo "$removed" >> ip_diff.md
+              echo '```' >> ip_diff.md
+            fi
 
-      if [ -z "$added" ] && [ -z "$removed" ]; then
-        echo "_No changes._" >> ip_diff.md
-      fi
+            if [ -z "$added" ] && [ -z "$removed" ]; then
+              echo "_No changes._" >> ip_diff.md
+            fi
 
-      echo "" >> ip_diff.md
-    done
+            echo "" >> ip_diff.md
+          done
 
-- name: Upload full diff as artifact
-  if: steps.compare.outputs.changed == 'true'
-  uses: actions/upload-artifact@v4
-  with:
-    name: full-meta-diff
-    path: ip_diff.md
+      - name: Upload full diff as artifact
+        if: steps.compare.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-meta-diff
+          path: ip_diff.md
 
       - name: Create issue for IP changes
         if: steps.compare.outputs.changed == 'true'
