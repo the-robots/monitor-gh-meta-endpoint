@@ -1,0 +1,114 @@
+name: Monitor GitHub Meta Endpoint
+
+on:
+  schedule:
+    - cron: "0 * * * *"  # Every hour
+  workflow_dispatch:
+
+jobs:
+  monitor-meta:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Fetch current GitHub meta
+        run: |
+          curl -s https://api.github.com/meta -o meta.json
+          jq '{hooks, actions, web, api, git, pages, packages}' meta.json > trimmed-meta.json
+          sha256sum trimmed-meta.json | cut -d ' ' -f1 > meta.hash
+
+      - name: Load previous data (if any)
+        run: |
+          if [ -f .meta.last.json ]; then
+            echo "Previous meta exists"
+          else
+            echo "{}" > .meta.last.json
+          fi
+
+      - name: Compare for changes
+        id: compare
+        run: |
+          OLD_HASH=$(cat .meta.last.hash 2>/dev/null || echo "")
+          NEW_HASH=$(cat meta.hash)
+
+          echo "old_hash=$OLD_HASH" >> "$GITHUB_OUTPUT"
+          echo "new_hash=$NEW_HASH" >> "$GITHUB_OUTPUT"
+
+          if [ "$OLD_HASH" != "$NEW_HASH" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate IP diff summary
+        if: steps.compare.outputs.changed == 'true'
+        id: ipdiff
+        run: |
+          echo "## GitHub Meta IP Changes" > ip_diff.md
+          echo "" >> ip_diff.md
+          echo "**Timestamp:** $(date -u)" >> ip_diff.md
+          echo "" >> ip_diff.md
+
+          for section in hooks actions pages api git web packages; do
+            echo "### Section: \`$section\`" >> ip_diff.md
+            old=$(jq -r ".$section[]" .meta.last.json | sort)
+            new=$(jq -r ".$section[]" trimmed-meta.json | sort)
+
+            added=$(comm -13 <(echo "$old") <(echo "$new"))
+            removed=$(comm -23 <(echo "$old") <(echo "$new"))
+
+            if [ -n "$added" ]; then
+              echo "**Added:**" >> ip_diff.md
+              echo '```' >> ip_diff.md
+              echo "$added" >> ip_diff.md
+              echo '```' >> ip_diff.md
+            fi
+
+            if [ -n "$removed" ]; then
+              echo "**Removed:**" >> ip_diff.md
+              echo '```' >> ip_diff.md
+              echo "$removed" >> ip_diff.md
+              echo '```' >> ip_diff.md
+            fi
+
+            if [ -z "$added" ] && [ -z "$removed" ]; then
+              echo "_No changes._" >> ip_diff.md
+            fi
+
+            echo "" >> ip_diff.md
+          done
+
+      - name: Create issue for IP changes
+        if: steps.compare.outputs.changed == 'true'
+        id: create_issue
+        uses: peter-evans/create-issue-from-file@v4
+        with:
+          title: "GitHub Meta IP Change Detected – ${{ steps.compare.outputs.new_hash }}"
+          content-filepath: ip_diff.md
+          labels: ip-change, github-meta
+
+      - name: Notify via webhook
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          WEBHOOK_URL: ${{ secrets.META_CHANGE_WEBHOOK }}
+        run: |
+          ISSUE_URL="${{ steps.create_issue.outputs.issue-url }}"
+          SUMMARY=$(head -n 20 ip_diff.md | sed 's/"/\\"/g')
+          curl -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\": \"🚨 GitHub Meta IP Change Detected\n\n$SUMMARY\n\n🔗 View issue: $ISSUE_URL\"}"
+
+      - name: Save new meta for future comparison
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          cp trimmed-meta.json .meta.last.json
+          cp meta.hash .meta.last.hash
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add .meta.last.*
+          git commit -m "Update stored meta snapshot"
+          git push
