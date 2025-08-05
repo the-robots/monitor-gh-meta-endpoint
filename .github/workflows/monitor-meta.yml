@@ -45,43 +45,55 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Generate summarized IP diff for issue
+      - name: Generate full IP diff and count summary
         if: steps.compare.outputs.changed == 'true'
         id: ipdiff
         run: |
-          echo "## GitHub Meta IP Changes" > ip_diff.md
+          TOTAL_ADDED=0
+          TOTAL_REMOVED=0
+          echo "## :rotating_light: GitHub Meta IP Changes Detected" > ip_diff.md
           echo "" >> ip_diff.md
           echo "**Timestamp:** $(date -u)" >> ip_diff.md
           echo "" >> ip_diff.md
 
           for section in hooks actions pages api git web packages; do
-            echo "### Section: \`$section\`" >> ip_diff.md
             old=$(jq -r ".$section[]" .meta.last.json | sort)
             new=$(jq -r ".$section[]" trimmed-meta.json | sort)
 
-            added=$(comm -13 <(echo "$old") <(echo "$new") | head -n 10)
-            removed=$(comm -23 <(echo "$old") <(echo "$new") | head -n 10)
+            added=$(comm -13 <(echo "$old") <(echo "$new"))
+            removed=$(comm -23 <(echo "$old") <(echo "$new"))
 
-            if [ -n "$added" ]; then
-              echo "**Added (first 10 shown):**" >> ip_diff.md
+            COUNT_ADDED=$(echo "$added" | grep -c . || true)
+            COUNT_REMOVED=$(echo "$removed" | grep -c . || true)
+
+            TOTAL_ADDED=$((TOTAL_ADDED + COUNT_ADDED))
+            TOTAL_REMOVED=$((TOTAL_REMOVED + COUNT_REMOVED))
+
+            if [ "$COUNT_ADDED" -gt 0 ] || [ "$COUNT_REMOVED" -gt 0 ]; then
+              echo "### \`$section\`" >> ip_diff.md
+            fi
+
+            if [ "$COUNT_ADDED" -gt 0 ]; then
+              echo "**Added ($COUNT_ADDED):**" >> ip_diff.md
               echo '```' >> ip_diff.md
               echo "$added" >> ip_diff.md
               echo '```' >> ip_diff.md
             fi
 
-            if [ -n "$removed" ]; then
-              echo "**Removed (first 10 shown):**" >> ip_diff.md
+            if [ "$COUNT_REMOVED" -gt 0 ]; then
+              echo "**Removed ($COUNT_REMOVED):**" >> ip_diff.md
               echo '```' >> ip_diff.md
               echo "$removed" >> ip_diff.md
               echo '```' >> ip_diff.md
             fi
 
-            if [ -z "$added" ] && [ -z "$removed" ]; then
-              echo "_No changes._" >> ip_diff.md
+            if [ "$COUNT_ADDED" -gt 0 ] || [ "$COUNT_REMOVED" -gt 0 ]; then
+              echo "" >> ip_diff.md
             fi
-
-            echo "" >> ip_diff.md
           done
+
+          echo "added=$TOTAL_ADDED" >> "$GITHUB_OUTPUT"
+          echo "removed=$TOTAL_REMOVED" >> "$GITHUB_OUTPUT"
 
       - name: Upload full diff as artifact
         if: steps.compare.outputs.changed == 'true'
@@ -95,20 +107,9 @@ jobs:
         id: create_issue
         uses: peter-evans/create-issue-from-file@v4
         with:
-          title: "GitHub Meta IP Change Detected – ${{ steps.compare.outputs.new_hash }}"
+          title: ":rotating_light: New IP changes – ${{ steps.ipdiff.outputs.added }} added, ${{ steps.ipdiff.outputs.removed }} removed"
           content-filepath: ip_diff.md
           labels: ip-change, github-meta
-
-      - name: Notify via webhook
-        if: steps.compare.outputs.changed == 'true'
-        env:
-          WEBHOOK_URL: ${{ secrets.META_CHANGE_WEBHOOK }}
-        run: |
-          ISSUE_URL="${{ steps.create_issue.outputs.issue-url }}"
-          SUMMARY=$(head -n 20 ip_diff.md | sed 's/"/\\"/g')
-          curl -X POST "$WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d "{\"text\": \"🚨 GitHub Meta IP Change Detected\n\n$SUMMARY\n\n🔗 View issue: $ISSUE_URL\"}"
 
       - name: Save new meta for future comparison
         if: steps.compare.outputs.changed == 'true'
