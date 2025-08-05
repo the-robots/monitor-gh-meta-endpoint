@@ -23,15 +23,30 @@ jobs:
           sha256sum trimmed-meta.json | cut -d ' ' -f1 > meta.hash
 
       - name: Load previous data (if any)
+        id: baseline
         run: |
           if [ -f .meta.last.json ]; then
-            echo "Previous meta exists"
+            echo "has_baseline=true" >> "$GITHUB_OUTPUT"
           else
             echo "{}" > .meta.last.json
+            echo "has_baseline=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: First-time setup — Save baseline and exit
+        if: steps.baseline.outputs.has_baseline == 'false'
+        run: |
+          echo "First run — saving current GitHub meta as baseline."
+          cp trimmed-meta.json .meta.last.json
+          cp meta.hash .meta.last.hash
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add .meta.last.*
+          git commit -m "Initial baseline snapshot"
+          git push
 
       - name: Compare for changes
         id: compare
+        if: steps.baseline.outputs.has_baseline == 'true'
         run: |
           OLD_HASH=$(cat .meta.last.hash 2>/dev/null || echo "")
           NEW_HASH=$(cat meta.hash)
@@ -45,7 +60,7 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Generate full IP diff and count summary
+      - name: Generate issue summary and counts
         if: steps.compare.outputs.changed == 'true'
         id: ipdiff
         run: |
@@ -55,6 +70,8 @@ jobs:
           echo "" >> ip_diff.md
           echo "**Timestamp:** $(date -u)" >> ip_diff.md
           echo "" >> ip_diff.md
+
+          echo "### Summary by IP range" >> ip_diff.md
 
           for section in hooks actions pages api git web packages; do
             old=$(jq -r ".$section[]" .meta.last.json | sort)
@@ -70,27 +87,13 @@ jobs:
             TOTAL_REMOVED=$((TOTAL_REMOVED + COUNT_REMOVED))
 
             if [ "$COUNT_ADDED" -gt 0 ] || [ "$COUNT_REMOVED" -gt 0 ]; then
-              echo "### \`$section\`" >> ip_diff.md
-            fi
-
-            if [ "$COUNT_ADDED" -gt 0 ]; then
-              echo "**Added ($COUNT_ADDED):**" >> ip_diff.md
-              echo '```' >> ip_diff.md
-              echo "$added" >> ip_diff.md
-              echo '```' >> ip_diff.md
-            fi
-
-            if [ "$COUNT_REMOVED" -gt 0 ]; then
-              echo "**Removed ($COUNT_REMOVED):**" >> ip_diff.md
-              echo '```' >> ip_diff.md
-              echo "$removed" >> ip_diff.md
-              echo '```' >> ip_diff.md
-            fi
-
-            if [ "$COUNT_ADDED" -gt 0 ] || [ "$COUNT_REMOVED" -gt 0 ]; then
-              echo "" >> ip_diff.md
+              echo "- \`$section\`: **$COUNT_ADDED added**, **$COUNT_REMOVED removed**" >> ip_diff.md
             fi
           done
+
+          echo "" >> ip_diff.md
+          echo "_Full IP changes available in the attached workflow artifact:_ [Download Full IP Diff](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> ip_diff.md
+          echo "" >> ip_diff.md
 
           echo "added=$TOTAL_ADDED" >> "$GITHUB_OUTPUT"
           echo "removed=$TOTAL_REMOVED" >> "$GITHUB_OUTPUT"
