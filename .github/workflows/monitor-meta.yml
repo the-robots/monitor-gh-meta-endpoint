@@ -1,22 +1,18 @@
-name: Monitor GitHub Meta Endpoint
+name: monitor-meta
 
 on:
   schedule:
-    - cron: "0 * * * *"  # Every hour
+    - cron: '0 * * * *'  # runs hourly
   workflow_dispatch:
 
 jobs:
   monitor-meta:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      issues: write
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Fetch current GitHub meta
+      - name: Pull current GitHub meta
         run: |
           curl -s https://api.github.com/meta -o meta.json
           jq '{hooks, actions, web, api, git, pages, packages}' meta.json > trimmed-meta.json
@@ -26,13 +22,13 @@ jobs:
         id: baseline
         run: |
           if [ -f .meta.last.json ]; then
-            echo "has_baseline=true" >> "$GITHUB_OUTPUT"
+            echo "has_baseline=true" >> $GITHUB_OUTPUT
           else
             echo "{}" > .meta.last.json
-            echo "has_baseline=false" >> "$GITHUB_OUTPUT"
+            echo "has_baseline=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: First-time setup — Save baseline and exit
+      - name: Save first-time baseline and exit
         if: steps.baseline.outputs.has_baseline == 'false'
         run: |
           echo "First run — saving current GitHub meta as baseline."
@@ -43,84 +39,49 @@ jobs:
           git add .meta.last.*
           git commit -m "Initial baseline snapshot"
           git push
+          echo "No previous baseline — exiting."
+          exit 0
 
       - name: Compare for changes
         id: compare
-        if: steps.baseline.outputs.has_baseline == 'true'
         run: |
           OLD_HASH=$(cat .meta.last.hash 2>/dev/null || echo "")
           NEW_HASH=$(cat meta.hash)
 
-          echo "old_hash=$OLD_HASH" >> "$GITHUB_OUTPUT"
-          echo "new_hash=$NEW_HASH" >> "$GITHUB_OUTPUT"
+          echo "old_hash=$OLD_HASH" >> $GITHUB_OUTPUT
+          echo "new_hash=$NEW_HASH" >> $GITHUB_OUTPUT
 
           if [ "$OLD_HASH" != "$NEW_HASH" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "changed=true" >> $GITHUB_OUTPUT
           else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Generate issue summary and counts
-        if: steps.compare.outputs.changed == 'true'
-        id: ipdiff
+      - name: Exit if no change
+        if: steps.compare.outputs.changed == 'false'
         run: |
-          TOTAL_ADDED=0
-          TOTAL_REMOVED=0
-          echo "## :rotating_light: GitHub Meta IP Changes Detected" > ip_diff.md
-          echo "" >> ip_diff.md
-          echo "**Timestamp:** $(date -u)" >> ip_diff.md
-          echo "" >> ip_diff.md
+          echo "No change detected. Exiting."
+          exit 0
 
-          echo "### Summary by IP range" >> ip_diff.md
-
-          for section in hooks actions pages api git web packages; do
-            old=$(jq -r ".$section[]" .meta.last.json | sort)
-            new=$(jq -r ".$section[]" trimmed-meta.json | sort)
-
-            added=$(comm -13 <(echo "$old") <(echo "$new"))
-            removed=$(comm -23 <(echo "$old") <(echo "$new"))
-
-            COUNT_ADDED=$(echo "$added" | grep -c . || true)
-            COUNT_REMOVED=$(echo "$removed" | grep -c . || true)
-
-            TOTAL_ADDED=$((TOTAL_ADDED + COUNT_ADDED))
-            TOTAL_REMOVED=$((TOTAL_REMOVED + COUNT_REMOVED))
-
-            if [ "$COUNT_ADDED" -gt 0 ] || [ "$COUNT_REMOVED" -gt 0 ]; then
-              echo "- \`$section\`: **$COUNT_ADDED added**, **$COUNT_REMOVED removed**" >> ip_diff.md
-            fi
-          done
-
-          echo "" >> ip_diff.md
-          echo "_Full IP changes available in the attached workflow artifact:_ [Download Full IP Diff](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> ip_diff.md
-          echo "" >> ip_diff.md
-
-          echo "added=$TOTAL_ADDED" >> "$GITHUB_OUTPUT"
-          echo "removed=$TOTAL_REMOVED" >> "$GITHUB_OUTPUT"
-
-      - name: Upload full diff as artifact
-        if: steps.compare.outputs.changed == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: full-meta-diff
-          path: ip_diff.md
+      - name: Generate IP diff
+        run: |
+          python3 scripts/diff-meta.py > ip.diff.md
 
       - name: Create issue for IP changes
-        if: steps.compare.outputs.changed == 'true'
-        id: create_issue
         uses: peter-evans/create-issue-from-file@v4
         with:
-          title: ":rotating_light: New IP changes – ${{ steps.ipdiff.outputs.added }} added, ${{ steps.ipdiff.outputs.removed }} removed"
-          content-filepath: ip_diff.md
+          title: ":rotating_light: New IP changes"
+          content-filepath: ip.diff.md
           labels: ip-change, github-meta
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: the-robots/monitor-gh-meta-endpoint
 
       - name: Save new meta for future comparison
-        if: steps.compare.outputs.changed == 'true'
         run: |
           cp trimmed-meta.json .meta.last.json
           cp meta.hash .meta.last.hash
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add .meta.last.*
-          git commit -m "Update stored meta snapshot"
+          git commit -m "Updated baseline after changes"
           git push
