@@ -2,7 +2,7 @@ name: monitor-meta
 
 on:
   schedule:
-    - cron: '0 * * * *'  # runs hourly
+    - cron: '0 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
       - name: Save first-time baseline and exit
         if: steps.baseline.outputs.has_baseline == 'false'
         run: |
-          echo "First run — saving current GitHub meta as baseline."
+          echo "Saving initial baseline..."
           cp trimmed-meta.json .meta.last.json
           cp meta.hash .meta.last.hash
           git config user.name "github-actions"
@@ -39,7 +39,6 @@ jobs:
           git add .meta.last.*
           git commit -m "Initial baseline snapshot"
           git push
-          echo "No previous baseline — exiting."
           exit 0
 
       - name: Compare for changes
@@ -63,18 +62,43 @@ jobs:
           echo "No change detected. Exiting."
           exit 0
 
-      - name: Generate IP diff
+      - name: Generate IP diff inline
         run: |
-          python3 scripts/diff-meta.py > ip.diff.md
+          echo ":rotating_light: **New IP changes detected**" > ip.diff.md
+          echo "" >> ip.diff.md
+
+          # Added IPs
+          echo "## :heavy_plus_sign: Added IPs" >> ip.diff.md
+          jq -r '. as $new | input | to_entries[] | select(.value != $new[.key]) | .key' trimmed-meta.json .meta.last.json |
+            while read section; do
+              echo "### $section" >> ip.diff.md
+              jq -r --arg section "$section" '
+                [$section[]] as $new
+                | input | [$section[]] as $old
+                | ($new - $old)[]?' trimmed-meta.json .meta.last.json |
+                sed 's/^/- /' >> ip.diff.md || true
+            done
+
+          echo "" >> ip.diff.md
+
+          # Removed IPs
+          echo "## :heavy_minus_sign: Removed IPs" >> ip.diff.md
+          jq -r '. as $new | input | to_entries[] | select(.value != $new[.key]) | .key' trimmed-meta.json .meta.last.json |
+            while read section; do
+              echo "### $section" >> ip.diff.md
+              jq -r --arg section "$section" '
+                [$section[]] as $new
+                | input | [$section[]] as $old
+                | ($old - $new)[]?' trimmed-meta.json .meta.last.json |
+                sed 's/^/- /' >> ip.diff.md || true
+            done
 
       - name: Create issue for IP changes
         uses: peter-evans/create-issue-from-file@v4
         with:
-          title: ":rotating_light: New IP changes"
+          title: ":rotating_light: GitHub Meta IP Change Detected"
           content-filepath: ip.diff.md
           labels: ip-change, github-meta
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: the-robots/monitor-gh-meta-endpoint
 
       - name: Save new meta for future comparison
         run: |
@@ -83,5 +107,5 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add .meta.last.*
-          git commit -m "Updated baseline after changes"
+          git commit -m "Updated baseline after detected change"
           git push
