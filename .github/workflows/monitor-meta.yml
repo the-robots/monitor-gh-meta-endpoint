@@ -94,6 +94,7 @@ jobs:
             done
 
       - name: Create issue for IP changes
+        if: steps.compare.outputs.changed == 'true'
         uses: peter-evans/create-issue-from-file@v4
         with:
           title: ":rotating_light: GitHub Meta IP Change Detected"
