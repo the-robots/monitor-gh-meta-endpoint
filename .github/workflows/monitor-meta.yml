@@ -63,35 +63,40 @@ jobs:
           exit 0
 
       - name: Generate IP diff inline
+        if: steps.compare.outputs.changed == 'true'
         run: |
           echo ":rotating_light: **New IP changes detected**" > ip.diff.md
           echo "" >> ip.diff.md
 
-          # Added IPs
           echo "## :heavy_plus_sign: Added IPs" >> ip.diff.md
           jq -r '. as $new | input | to_entries[] | select(.value != $new[.key]) | .key' trimmed-meta.json .meta.last.json |
-            while read section; do
+          while read section; do
+            added=$(jq -r --arg section "$section" '
+              [$section[]] as $new
+              | input | [$section[]] as $old
+              | ($new - $old)[]?' trimmed-meta.json .meta.last.json)
+
+            if [ -n "$added" ]; then
               echo "### $section" >> ip.diff.md
-              jq -r --arg section "$section" '
-                [$section[]] as $new
-                | input | [$section[]] as $old
-                | ($new - $old)[]?' trimmed-meta.json .meta.last.json |
-                sed 's/^/- /' >> ip.diff.md || true
-            done
+              echo "$added" | sed 's/^/- /' >> ip.diff.md
+              echo "" >> ip.diff.md
+            fi
+          done
 
-          echo "" >> ip.diff.md
-
-          # Removed IPs
           echo "## :heavy_minus_sign: Removed IPs" >> ip.diff.md
           jq -r '. as $new | input | to_entries[] | select(.value != $new[.key]) | .key' trimmed-meta.json .meta.last.json |
-            while read section; do
+          while read section; do
+            removed=$(jq -r --arg section "$section" '
+              [$section[]] as $new
+              | input | [$section[]] as $old
+              | ($old - $new)[]?' trimmed-meta.json .meta.last.json)
+
+            if [ -n "$removed" ]; then
               echo "### $section" >> ip.diff.md
-              jq -r --arg section "$section" '
-                [$section[]] as $new
-                | input | [$section[]] as $old
-                | ($old - $new)[]?' trimmed-meta.json .meta.last.json |
-                sed 's/^/- /' >> ip.diff.md || true
-            done
+              echo "$removed" | sed 's/^/- /' >> ip.diff.md
+              echo "" >> ip.diff.md
+            fi
+          done
 
       - name: Create issue for IP changes
         if: steps.compare.outputs.changed == 'true'
